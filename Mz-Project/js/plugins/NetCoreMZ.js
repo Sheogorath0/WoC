@@ -1,6 +1,6 @@
 /*:
  * @target MZ
- * @plugindesc MZ 20인 MMO - [10단계] 독립 렌더러 기반 멀티 맵 세션 분리 완벽판
+ * @plugindesc MZ 20인 MMO - [15단계] 캐릭터 외형(이미지/인덱스) 완벽 실시간 동기화 빌드
  * @author 코딩 파트너
  */
 
@@ -10,54 +10,50 @@
     let myNetId = null;
     let isLoggedIn = false;
     let titleSceneRef = null;
-    
-    // 현재 맵에 존재하는 원격 플레이어들만 실시간 관리하는 저장소
-    let remotePlayers = {}; 
+
+    let remotePlayers = {};
 
     // ===================================================================
     // 1. 순수 네트워크 캐릭터 클래스 및 이름표
     // ===================================================================
-    function Game_NetPlayer() {
-        this.initialize(...arguments);
-    }
+    function Game_NetPlayer() { this.initialize(...arguments); }
     Game_NetPlayer.prototype = Object.create(Game_Character.prototype);
     Game_NetPlayer.prototype.constructor = Game_NetPlayer;
-    
-    Game_NetPlayer.prototype.initialize = function(userId, data) {
+
+    Game_NetPlayer.prototype.initialize = function (userId, data) {
         Game_Character.prototype.initialize.call(this);
         this._userId = userId;
         this.setPosition(data.x, data.y);
+
+        // [비주얼 동기화 핵심] 상대방 캐릭터 생성 시 서버가 준 이미지 강제 적용
         this.setImage(data.characterName, data.characterIndex);
+
         this.setDirection(data.d || 2);
-        this.setMoveSpeed(data.moveSpeed || 4); 
+        this.setMoveSpeed(data.moveSpeed || 4);
         this.setThrough(true);
         this.setStepAnime(true);
-        this._sprite = null;     
+        this._sprite = null;
     };
 
-    Game_NetPlayer.prototype.updateData = function(data) {
+    Game_NetPlayer.prototype.updateData = function (data) {
         this.setDirection(data.d);
         if (data.moveSpeed !== undefined) this.setMoveSpeed(data.moveSpeed);
 
         const diffX = Math.abs(this._x - data.x);
         const diffY = Math.abs(this._y - data.y);
-        
-        if (diffX > 1 || diffY > 1) {
-            this.setPosition(data.x, data.y);
-        } else {
-            this._x = data.x;
-            this._y = data.y;
+        if (diffX > 1 || diffY > 1) this.setPosition(data.x, data.y);
+        else { this._x = data.x; this._y = data.y; }
+
+        // [비주얼 동기화 핵심] 이동 패킷을 받을 때마다 현재 외형이 바뀌었는지 체크하고 강제 리프레시
+        if (this._characterName !== data.characterName || this._characterIndex !== data.characterIndex) {
+            this.setImage(data.characterName, data.characterIndex);
         }
-        this.setImage(data.characterName, data.characterIndex);
     };
 
-    function Sprite_NetNameTag() {
-        this.initialize(...arguments);
-    }
+    function Sprite_NetNameTag() { this.initialize(...arguments); }
     Sprite_NetNameTag.prototype = Object.create(Sprite.prototype);
     Sprite_NetNameTag.prototype.constructor = Sprite_NetNameTag;
-
-    Sprite_NetNameTag.prototype.initialize = function(userId) {
+    Sprite_NetNameTag.prototype.initialize = function (userId) {
         Sprite.prototype.initialize.call(this);
         this._userId = userId;
         this.bitmap = new Bitmap(120, 30);
@@ -72,40 +68,31 @@
     };
 
     const _Scene_Map_update = Scene_Map.prototype.update;
-    Scene_Map.prototype.update = function() {
+    Scene_Map.prototype.update = function () {
         _Scene_Map_update.call(this);
-        for (const id in remotePlayers) {
-            if (remotePlayers[id]) remotePlayers[id].update(); 
-        }
+        for (const id in remotePlayers) { if (remotePlayers[id]) remotePlayers[id].update(); }
     };
 
     // ===================================================================
-    // 2. 타이틀 하이재킹 및 데이터 정리
+    // 2. 타이틀 하이재킹 및 네트워크 리시버
     // ===================================================================
     const _Scene_Title_start = Scene_Title.prototype.start;
-    Scene_Title.prototype.start = function() {
+    Scene_Title.prototype.start = function () {
         _Scene_Title_start.call(this);
         isLoggedIn = false;
         titleSceneRef = null;
         clearAllRemotePlayers();
-    };
 
-    const _Scene_Title_commandNewGame = Scene_Title.prototype.commandNewGame;
-    Scene_Title.prototype.commandNewGame = function() {
-        titleSceneRef = this;
-        this._commandWindow.close(); 
-        setTimeout(() => promptLogin(), 100);
-    };
+        const urlParams = new URLSearchParams(window.location.search);
+        const autoId = urlParams.get('autoid');
+        const autoPw = urlParams.get('autopw');
 
-    function promptLogin() {
-        const userId = prompt("로그인할 ID를 입력하세요 (예: admin, player1):");
-        const userPassword = prompt("비밀번호를 입력하세요:");
-        if (userId && userPassword) connectAndLogin(userId, userPassword);
-        else if (titleSceneRef) {
-            titleSceneRef._commandWindow.activate();
-            titleSceneRef._commandWindow.open();
+        if (autoId && autoPw) {
+            titleSceneRef = this;
+            if (this._commandWindow) this._commandWindow.close();
+            connectAndLogin(autoId, autoPw);
         }
-    }
+    };
 
     function connectAndLogin(userId, password) {
         if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -117,14 +104,10 @@
         }
     }
 
-    // [중요 로직] 다른 유저들을 화면과 메모리에서 흔적 없이 지우는 클린 함수
     function clearAllRemotePlayers() {
         for (const id in remotePlayers) {
             const netPlayer = remotePlayers[id];
-            if (netPlayer && netPlayer._sprite && netPlayer._sprite.parent) {
-                netPlayer._sprite.parent.removeChild(netPlayer._sprite);
-            }
-            delete remotePlayers[id];
+            if (netPlayer && netPlayer._sprite && netPlayer._sprite.parent) netPlayer._sprite.parent.removeChild(netPlayer._sprite);
         }
         remotePlayers = {};
     }
@@ -135,14 +118,13 @@
                 isLoggedIn = true;
                 myNetId = packet.id;
                 console.log(`[Network] ${myNetId} 로그인 성공!`);
-                
-                DataManager.setupNewGame(); 
+
+                DataManager.setupNewGame();
+
+                // [중요] 로그인 성공 직후 내 로컬 캐릭터 이미지를 서버가 지정한 이미지로 강제 오버라이딩
                 $gamePlayer.setImage(packet.characterName, packet.characterIndex);
-                
-                // 파일에 저장되어 있던 mapId와 좌표로 이동 보존
                 $gamePlayer.reserveTransfer(packet.mapId || 1, packet.x, packet.y, 2, 0);
-                
-                // 로그인 시 전체 명단을 받되, "나와 같은 맵에 있는 유저들만" 객체화하여 필터링 축적
+
                 if (packet.existingPlayers) {
                     for (const id in packet.existingPlayers) {
                         if (id !== myNetId && packet.existingPlayers[id].mapId === (packet.mapId || 1)) {
@@ -150,28 +132,32 @@
                         }
                     }
                 }
-                
+
                 if (titleSceneRef) {
                     titleSceneRef.fadeOutAll();
                     SceneManager.goto(Scene_Map);
                 }
                 break;
 
-            case 'LOGIN_FAIL':
-                alert(packet.message);
-                if (titleSceneRef) {
-                    titleSceneRef._commandWindow.activate();
-                    titleSceneRef._commandWindow.open();
+            case 'REFRESH_MAP_PLAYERS':
+                if (packet.existingPlayers) {
+                    for (const id in packet.existingPlayers) {
+                        if (id !== myNetId && !remotePlayers[id]) {
+                            remotePlayers[id] = new Game_NetPlayer(id, packet.existingPlayers[id]);
+                        }
+                    }
+                    if (SceneManager._scene instanceof Scene_Map && SceneManager._scene._spriteset) {
+                        const spriteset = SceneManager._scene._spriteset;
+                        for (const id in remotePlayers) { addNetSpriteToScene(spriteset, remotePlayers[id]); }
+                    }
                 }
                 break;
 
             case 'NEW_PLAYER':
             case 'UPDATE_POSITION':
-                // 내 화면의 현재 맵 ID와 패킷 유저의 맵 ID가 일치할 때만 처리
                 if (isLoggedIn && $gameMap && packet.mapId === $gameMap.mapId()) {
                     updateRemotePlayer(packet.id, packet);
                 } else {
-                    // 만약 내 맵과 다른 곳으로 가버린 유저라면 내 화면에서 지워줍니다.
                     removeRemotePlayer(packet.id);
                 }
                 break;
@@ -183,21 +169,36 @@
     }
 
     // ===================================================================
-    // 3. 독립 렌더링 및 맵 전환 리프레시
+    // 3. 독립 렌더링 및 맵 전환
     // ===================================================================
-    
-    // [핵심] 유저가 포탈을 타고 새로운 맵 화면으로 들어왔을 때 실행되는 함수 하이재킹
+    const _Game_Player_reserveTransfer = Game_Player.prototype.reserveTransfer;
+    Game_Player.prototype.reserveTransfer = function (mapId, x, y, d, fadeType) {
+        if (isLoggedIn && $gameMap && $gameMap.mapId() !== mapId) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                // 이사 가기 전에도 실제 화면에 그려진 내 렌더링 속성을 추출하여 전송
+                socket.send(JSON.stringify({
+                    type: 'MOVE',
+                    mapId: mapId, x: x, y: y, d: d,
+                    characterName: this._characterName,
+                    characterIndex: this._characterIndex,
+                    moveSpeed: this.realMoveSpeed()
+                }));
+            }
+        }
+        _Game_Player_reserveTransfer.call(this, mapId, x, y, d, fadeType);
+    };
+
     const _Spriteset_Map_createCharacters = Spriteset_Map.prototype.createCharacters;
-    Spriteset_Map.prototype.createCharacters = function() {
-        // 1. 맵이 바뀌었으므로 이전 맵의 유저 그림들을 완전히 청소합니다.
+    Spriteset_Map.prototype.createCharacters = function () {
         clearAllRemotePlayers();
-        
         _Spriteset_Map_createCharacters.call(this);
-        
-        // 2. 새로운 맵의 타일셋이 깔리면, 서버에 현재 내 바뀐 맵 위치 패킷을 1회 즉시 강제 전송합니다.
-        // 이를 통해 서버가 내 맵 세션을 업데이트하고 주변 유저 목록을 동기화하게 유도합니다.
-        if (isLoggedIn) {
-            sendMovementPacket();
+        if (isLoggedIn && $gameMap) {
+            socket.send(JSON.stringify({
+                type: 'MAP_CHANGED',
+                mapId: $gameMap.mapId(),
+                x: $gamePlayer.x,
+                y: $gamePlayer.y
+            }));
         }
     };
 
@@ -206,23 +207,19 @@
         const sprite = new Sprite_Character(netPlayer);
         spriteset._characterSprites.push(sprite);
         spriteset._tilemap.addChild(sprite);
-        netPlayer._sprite = sprite; 
+        netPlayer._sprite = sprite;
 
         const nameTag = new Sprite_NetNameTag(netPlayer._userId);
-        nameTag.y = -48; 
+        nameTag.y = -48;
         sprite.addChild(nameTag);
     }
 
+    // 다른 맵에서 내 방으로 이사 온 유저 이미지 동기화 보장
     function updateRemotePlayer(userId, data) {
-        if (userId === myNetId) return; 
+        if (userId === myNetId) return;
+        if (!remotePlayers[userId]) remotePlayers[userId] = new Game_NetPlayer(userId, data);
+        else remotePlayers[userId].updateData(data);
 
-        if (!remotePlayers[userId]) {
-            remotePlayers[userId] = new Game_NetPlayer(userId, data);
-        } else {
-            remotePlayers[userId].updateData(data);
-        }
-
-        // 화면 씬 구조가 매칭되면 렌더링 주입
         if (SceneManager._scene instanceof Scene_Map && SceneManager._scene._spriteset) {
             addNetSpriteToScene(SceneManager._scene._spriteset, remotePlayers[userId]);
         }
@@ -236,35 +233,28 @@
         }
     }
 
-    // ===================================================================
-    // 4. 내 움직임 및 맵 ID 서버 전송
-    // ===================================================================
     const _Game_Player_executeMove = Game_Player.prototype.executeMove;
-    Game_Player.prototype.executeMove = function(direction) {
+    Game_Player.prototype.executeMove = function (direction) {
         _Game_Player_executeMove.call(this, direction);
-        if (isLoggedIn) {
-            sendMovementPacket();
-        }
+        if (isLoggedIn) sendMovementPacket();
     };
 
-    // [기능 확장] 맵 ID(`mapId()`)를 포함하여 서버에 위치를 송신하는 고정 함수
+    // [핵심 변경] $gamePlayer.characterName() 대신 실시간 언더바 변수인 _characterName을 직접 털어서 보냅니다.
     function sendMovementPacket() {
         if (socket && socket.readyState === WebSocket.OPEN && $gameMap) {
             socket.send(JSON.stringify({
                 type: 'MOVE',
-                mapId: $gameMap.mapId(), // 현재 내 맵 번호 주입! (예: 1번 맵, 2번 맵)
-                x: $gamePlayer.x, 
-                y: $gamePlayer.y, 
+                mapId: $gameMap.mapId(),
+                x: $gamePlayer.x,
+                y: $gamePlayer.y,
                 d: $gamePlayer.direction(),
-                characterName: $gamePlayer.characterName(), 
-                characterIndex: $gamePlayer.characterIndex(),
-                moveSpeed: $gamePlayer.realMoveSpeed() 
+                characterName: $gamePlayer._characterName,
+                characterIndex: $gamePlayer._characterIndex,
+                moveSpeed: $gamePlayer.realMoveSpeed()
             }));
         }
     }
 
-    // 5. 백그라운드 구동 유지
-    WebAudio._onHide = function() {};
-    SceneManager.isGameActive = function() { return true; };
-
+    WebAudio._onHide = function () { };
+    SceneManager.isGameActive = function () { return true; };
 })();

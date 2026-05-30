@@ -18,7 +18,7 @@ function saveUserData(data) {
 const activePlayers = {};
 
 console.log("=========================================");
-console.log("MZ MMORPG 10단계 (멀티 맵 세션 분리 서버) 구동 중...");
+console.log("MZ MMORPG 14단계 (잔상 버그 완전 소멸 빌드) 구동 중...");
 console.log("=========================================");
 
 wss.on('connection', (ws) => {
@@ -30,7 +30,7 @@ wss.on('connection', (ws) => {
 
             if (packet.type === 'REQUEST_LOGIN') {
                 const { id, password } = packet;
-                
+
                 delete require.cache[require.resolve('./userdata.js')];
                 const userDatabase = require('./userdata.js');
                 const user = userDatabase[id];
@@ -43,27 +43,33 @@ wss.on('connection', (ws) => {
 
                     myUserId = id;
                     console.log(`[로그인] ${myUserId} 세션 생성`);
-                    
-                    // [기능 확장] 유저의 맵 ID도 함께 관리합니다. (기본값 1번 맵)
+
+                    const currentMapId = user.mapId || 1;
+                    const currentX = user.x !== undefined ? user.x : 5;
+                    const currentY = user.y !== undefined ? user.y : 5;
+
                     activePlayers[myUserId] = {
-                        mapId: user.mapId || 1, 
-                        x: user.x,
-                        y: user.y,
+                        mapId: currentMapId,
+                        x: currentX,
+                        y: currentY,
                         d: 2,
                         characterName: user.characterName,
                         characterIndex: user.characterIndex,
                         moveSpeed: 4
                     };
 
-                    // 본인에게는 전체 목록을 우선 보냅니다 (클라이언트가 맵 필터링 처리)
                     ws.send(JSON.stringify({
                         type: 'LOGIN_SUCCESS',
                         id: myUserId,
-                        ...activePlayers[myUserId],
+                        mapId: currentMapId,
+                        x: currentX,
+                        y: currentY,
+                        characterName: user.characterName,
+                        characterIndex: user.characterIndex,
                         existingPlayers: activePlayers
                     }));
 
-                    // 다른 유저들에게 전송 (같은 맵에 있는 사람에게만 전달됨)
+                    // 입장 시 동일 맵 유저들에게 방송
                     broadcast(myUserId, {
                         type: 'NEW_PLAYER',
                         id: myUserId,
@@ -72,18 +78,60 @@ wss.on('connection', (ws) => {
                 } else {
                     ws.send(JSON.stringify({ type: 'LOGIN_FAIL', message: '아이디/비밀번호 오류' }));
                 }
-            } 
+            }
             else if (packet.type === 'MOVE' && myUserId) {
-                // 실시간 위치 및 맵 ID 동기화
-                activePlayers[myUserId].mapId = packet.mapId || 1;
+                // [기존 전송 로직 보완] 다른 유저들에게 퍼트리기 전, 
+                // "이 패킷을 보낸 유저가 이전에 있던 이전 방 번호"를 잠시 기억해둡니다.
+                const oldMapId = activePlayers[myUserId].mapId;
+                const newMapId = packet.mapId || 1;
+
+                // 서버 메모리에 새로운 좌표와 맵 ID를 갱신합니다.
+                activePlayers[myUserId].mapId = newMapId;
                 activePlayers[myUserId].x = packet.x;
                 activePlayers[myUserId].y = packet.y;
                 activePlayers[myUserId].d = packet.d;
                 activePlayers[myUserId].moveSpeed = packet.moveSpeed;
 
-                // [중요] 이동 패킷 방송
+                // 만약 유저가 포탈을 타고 "방을 이동하는 패킷"인 경우
+                if (oldMapId !== newMapId) {
+                    // 원래 있던 방(이전 맵)에 남아있는 사람들에게 
+                    // "나 방 옮기니까 내 잔상 지워줘!"라고 선제 타겟 방송을 쏩니다.
+                    broadcastToSpecificMap(myUserId, oldMapId, {
+                        type: 'UPDATE_POSITION',
+                        id: myUserId,
+                        mapId: newMapId, // 새로 이사 간 맵 ID를 실어서 보냄으로써 클라이언트가 지우도록 유도
+                        x: packet.x, y: packet.y, d: packet.d
+                    });
+                } else {
+                    // 평범한 한 칸 이동일 때는 현재 방에 있는 유저들에게 정상 방송
+                    broadcast(myUserId, {
+                        type: 'UPDATE_POSITION',
+                        id: myUserId,
+                        ...activePlayers[myUserId]
+                    });
+                }
+            }
+            else if (packet.type === 'MAP_CHANGED' && myUserId) {
+                activePlayers[myUserId].mapId = packet.mapId;
+                activePlayers[myUserId].x = packet.x;
+                activePlayers[myUserId].y = packet.y;
+
+                console.log(`[맵전환] ${myUserId} -> ${packet.mapId}번 맵 안착`);
+
+                const targetsInNewMap = {};
+                for (const id in activePlayers) {
+                    if (id !== myUserId && activePlayers[id].mapId === packet.mapId) {
+                        targetsInNewMap[id] = activePlayers[id];
+                    }
+                }
+
+                ws.send(JSON.stringify({
+                    type: 'REFRESH_MAP_PLAYERS',
+                    existingPlayers: targetsInNewMap
+                }));
+
                 broadcast(myUserId, {
-                    type: 'UPDATE_POSITION',
+                    type: 'NEW_PLAYER',
                     id: myUserId,
                     ...activePlayers[myUserId]
                 });
@@ -96,8 +144,7 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
         if (myUserId) {
             console.log(`[종료] ${myUserId} 나감`);
-            
-            // 나갈 때 최종 맵 ID와 위치 저장
+
             delete require.cache[require.resolve('./userdata.js')];
             const userDatabase = require('./userdata.js');
             if (userDatabase[myUserId] && activePlayers[myUserId]) {
@@ -107,7 +154,6 @@ wss.on('connection', (ws) => {
                 saveUserData(userDatabase);
             }
 
-            // 퇴장 패킷은 전체 맵의 모든 유저에게 전송하여 리스트에서 청소하게 함
             wss.clients.forEach((client) => {
                 if (client.readyState === 1) {
                     client.send(JSON.stringify({ type: 'REMOVE_PLAYER', id: myUserId }));
@@ -119,13 +165,11 @@ wss.on('connection', (ws) => {
     });
 });
 
-// [자동 배치 세이브] 맵 ID 정보를 포함하여 5초 주기로 저장
+// 자동 배치 세이브 (5초 주기)
 setInterval(() => {
     if (Object.keys(activePlayers).length === 0) return;
-
     delete require.cache[require.resolve('./userdata.js')];
     const userDatabase = require('./userdata.js');
-
     let isChanged = false;
     for (const id in activePlayers) {
         if (userDatabase[id]) {
@@ -138,21 +182,27 @@ setInterval(() => {
     if (isChanged) saveUserData(userDatabase);
 }, 5000);
 
-// ===================================================================
-// [핵심 업그레이드] 맵 기반 세션 라우팅 방송 함수
-// 패킷을 보낸 사람(senderId)과 같은 mapId를 가진 클라이언트에게만 패킷을 보냅니다.
-// ===================================================================
+// [기본] 내 현재 메모리상 맵 ID와 일치하는 유저들에게 방송하는 함수
 function broadcast(senderId, packetData) {
     const sender = activePlayers[senderId];
     if (!sender) return;
-
     wss.clients.forEach((client) => {
-        // 소켓 연결이 살아있는 클라이언트들을 전수 조사
         if (client.readyState === 1) {
-            // 주안점: 클라이언트들 중 서버의 activePlayers 명단에서 매칭되는 유저를 찾음
             for (const id in activePlayers) {
-                // 본인은 제외하고, 같은 맵 ID를 가진 유저의 소켓을 찾아 패킷 전송
                 if (id !== senderId && activePlayers[id].mapId === sender.mapId) {
+                    client.send(JSON.stringify(packetData));
+                }
+            }
+        }
+    });
+}
+
+// [신규] 특정 지정 맵 번호(targetMapId)에 서 있는 유저들에게만 패킷을 강제 배달하는 타겟 방송 함수
+function broadcastToSpecificMap(senderId, targetMapId, packetData) {
+    wss.clients.forEach((client) => {
+        if (client.readyState === 1) {
+            for (const id in activePlayers) {
+                if (id !== senderId && activePlayers[id].mapId === targetMapId) {
                     client.send(JSON.stringify(packetData));
                 }
             }

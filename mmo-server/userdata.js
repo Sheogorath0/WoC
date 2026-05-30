@@ -11,15 +11,15 @@ const userDatabase = {
     "password": "123",
     "characterName": "Actor2",
     "characterIndex": 1,
-    "x": 3,
-    "y": 3,
+    "x": 15,
+    "y": 6,
     "mapId": 1
   },
   "player2": {
     "password": "123",
     "characterName": "Actor3",
     "characterIndex": 2,
-    "x": 7,
+    "x": 4,
     "y": 5,
     "mapId": 1
   }
