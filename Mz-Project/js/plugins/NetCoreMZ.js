@@ -22,22 +22,46 @@
     Game_NetPlayer.prototype.initialize = function (userId, data) {
         Game_Character.prototype.initialize.call(this);
         this._userId = userId;
-        this.setPosition(data.x, data.y);
-        this.setImage(data.characterName, data.characterIndex);
-        this.setDirection(data.d || 2);
-        this.setMoveSpeed(data.moveSpeed || 4);
+
+        // 🛠️ [split 크래시 원천 차단 쉴드 코드]
+        // 엔진이 .split()을 실행하기 전에, 이 캐릭터의 기본 파일명을 무조건 "Actor1"로 선제 주입합니다.
+        // 데이터가 유효하다면 서버에서 준 값을 쓰고, 없으면 안전하게 기본 갈색머리 값을 방패로 세웁니다.
+        this._characterName = (data && data.characterName) ? data.characterName : "Actor1";
+        this._characterIndex = (data && data.characterIndex !== undefined) ? data.characterIndex : 0;
+
+        // 안전하게 방을 채운 뒤, 엔진의 이미지 세팅과 좌표 설정을 진행합니다.
+        this.setImage(this._characterName, this._characterIndex); Game_NetPlayer.prototype.update
+        this.setPosition(data ? data.x : 5, data ? data.y : 5);
+
+        this.setDirection(data ? (data.d || 2) : 2);
+        this.setMoveSpeed(data ? (data.moveSpeed || 4) : 4);
         this.setThrough(true);
         this.setStepAnime(true);
         this._sprite = null;
     };
     Game_NetPlayer.prototype.updateData = function (data) {
+        // 혹시라도 서버 패킷에 데이터가 깨져서 왔을 때를 대비한 2중 안전장치
+        if (!data) return;
+
         this.setDirection(data.d);
         if (data.moveSpeed !== undefined) this.setMoveSpeed(data.moveSpeed);
+
         const diffX = Math.abs(this._x - data.x);
         const diffY = Math.abs(this._y - data.y);
         if (diffX > 1 || diffY > 1) this.setPosition(data.x, data.y);
         else { this._x = data.x; this._y = data.y; }
-        this.setImage(data.characterName, data.characterIndex);
+
+        // 🛠️ [로그 분석 기반 진짜 해결책]
+        // 패킷으로 넘어온 파일명이 유효한지 검사하고, 만약 비어있거나 undefined라면
+        // 엔진이 split 크래시를 일으키지 않도록 현재 내 본래 파일명이나 "Actor1"을 방패로 세웁니다.
+        const validName = (data.characterName && typeof data.characterName === 'string') ? data.characterName : (this._characterName || "Actor1");
+        const validIndex = data.characterIndex !== undefined ? data.characterIndex : (this._characterIndex || 0);
+
+        // 안전하게 검증된 문자열만 엔진의 setImage로 전달합니다.
+        if (this._characterName !== validName || this._characterIndex !== validIndex) {
+            this.setImage(validName, validIndex);
+            this.setPattern(0);
+        }
     };
 
     function Sprite_NetNameTag() { this.initialize(...arguments); }
@@ -105,17 +129,20 @@
     function handleServerPacket(packet) {
         switch (packet.type) {
             case 'LOGIN_SUCCESS':
+            case 'LOGIN_SUCCESS':
                 isLoggedIn = true;
                 myNetId = packet.id;
-                console.log(`[Network] ${myNetId} 로그인 성공!`);
 
                 DataManager.setupNewGame();
-                $gamePlayer.setImage(packet.characterName, packet.characterIndex);
                 $gamePlayer.reserveTransfer(packet.mapId || 1, packet.x, packet.y, 2, 0);
 
-                if (packet.existingPlayers) {
+                // 🛠️ [split 에러 완벽 차단 안전장치]
+                // 다른 유저들의 정보를 방에 등록하기 전에, '기존 유저 데이터'가 실제로 존재하는지 
+                // 그리고 내 엔진이 그 데이터를 받아들일 준비(packet)가 확실히 되었는지 검증합니다.
+                if (packet.existingPlayers && typeof packet.existingPlayers === 'object') {
                     for (const id in packet.existingPlayers) {
-                        if (id !== myNetId && packet.existingPlayers[id].mapId === (packet.mapId || 1)) {
+                        // 내 아이디가 아니고, 해당 유저의 맵 ID가 유효할 때만 안전하게 캐릭터 객체 생성
+                        if (id !== myNetId && packet.existingPlayers[id] && packet.existingPlayers[id].mapId === (packet.mapId || 1)) {
                             remotePlayers[id] = new Game_NetPlayer(id, packet.existingPlayers[id]);
                         }
                     }
@@ -126,7 +153,6 @@
                     SceneManager.goto(Scene_Map);
                 }
                 break;
-
             case 'REFRESH_MAP_PLAYERS':
                 // [신규] 맵 이동 직후 서버가 보내준 "새 맵의 고인물 정지 유저 목록"을 일괄 생성
                 if (packet.existingPlayers) {
