@@ -30,7 +30,7 @@
         this._characterIndex = (data && data.characterIndex !== undefined) ? data.characterIndex : 0;
 
         // 안전하게 방을 채운 뒤, 엔진의 이미지 세팅과 좌표 설정을 진행합니다.
-        this.setImage(this._characterName, this._characterIndex); Game_NetPlayer.prototype.update
+        this.setImage(this._characterName, this._characterIndex);
         this.setPosition(data ? data.x : 5, data ? data.y : 5);
 
         this.setDirection(data ? (data.d || 2) : 2);
@@ -40,27 +40,38 @@
         this._sprite = null;
     };
     Game_NetPlayer.prototype.updateData = function (data) {
-        // 혹시라도 서버 패킷에 데이터가 깨져서 왔을 때를 대비한 2중 안전장치
         if (!data) return;
 
+        // 1. 방향 및 이동 속도 동기화
         this.setDirection(data.d);
         if (data.moveSpeed !== undefined) this.setMoveSpeed(data.moveSpeed);
 
+        // 2. 좌표 동기화 (위치 변화 보정)
         const diffX = Math.abs(this._x - data.x);
         const diffY = Math.abs(this._y - data.y);
         if (diffX > 1 || diffY > 1) this.setPosition(data.x, data.y);
         else { this._x = data.x; this._y = data.y; }
 
-        // 🛠️ [로그 분석 기반 진짜 해결책]
-        // 패킷으로 넘어온 파일명이 유효한지 검사하고, 만약 비어있거나 undefined라면
-        // 엔진이 split 크래시를 일으키지 않도록 현재 내 본래 파일명이나 "Actor1"을 방패로 세웁니다.
-        const validName = (data.characterName && typeof data.characterName === 'string') ? data.characterName : (this._characterName || "Actor1");
-        const validIndex = data.characterIndex !== undefined ? data.characterIndex : (this._characterIndex || 0);
+        // 🛠️ [지독한 비주얼 버그를 끝낼 열쇠]
+        // 좌표가 똑같아서 엔진이 연산을 패스하더라도, 파일명이나 인덱스가 달라졌는지 검사합니다.
+        const validName = data.characterName || "Actor1";
+        const validIndex = data.characterIndex !== undefined ? data.characterIndex : 0;
 
-        // 안전하게 검증된 문자열만 엔진의 setImage로 전달합니다.
+        // 만약 기존 내 외형 정보와 서버에서 날아온 새 외형 정보가 다르다면?
         if (this._characterName !== validName || this._characterIndex !== validIndex) {
+            // 즉시 상대방 눈에 보이는 내 캐릭터의 이미지를 완전히 교체해 버립니다!
             this.setImage(validName, validIndex);
-            this.setPattern(0);
+            this.setPattern(0); // 걷는 모션 초기화
+
+            // 화면 프리징 상태까지 대비해 즉시 리렌더링 강제 명령
+            if (SceneManager._scene instanceof Scene_Map && SceneManager._scene._spriteset) {
+                const spriteset = SceneManager._scene._spriteset;
+                const mySprite = spriteset._characterSprites.find(s => s._character === this);
+                if (mySprite) {
+                    if (typeof mySprite.updateBitmap === 'function') mySprite.updateBitmap();
+                    mySprite.update();
+                }
+            }
         }
     };
 
@@ -260,8 +271,16 @@
         if (socket && socket.readyState === WebSocket.OPEN && $gameMap) {
             socket.send(JSON.stringify({
                 type: 'MOVE',
-                mapId: $gameMap.mapId(), x: $gamePlayer.x, y: $gamePlayer.y, d: $gamePlayer.direction(),
-                characterName: $gamePlayer.characterName(), characterIndex: $gamePlayer.characterIndex(),
+                mapId: $gameMap.mapId(),
+                x: $gamePlayer.x,
+                y: $gamePlayer.y,
+                d: $gamePlayer.direction(),
+
+                // 🛠️ [진짜 해결책] 고정된 과거 변수를 과감히 지우고, 
+                // 현재 내 캐릭터 객체가 맵 위에서 진짜로 렌더링하고 있는 파일명과 인덱스를 실시간으로 털어서 보냅니다!
+                characterName: $gamePlayer.characterName(),
+                characterIndex: $gamePlayer.characterIndex(),
+
                 moveSpeed: $gamePlayer.realMoveSpeed()
             }));
         }
@@ -269,4 +288,46 @@
 
     WebAudio._onHide = function () { };
     SceneManager.isGameActive = function () { return true; };
+
+    // ===================================================================
+    // 4. 알만툴 순정 이벤트(파티원 변경 등) 감지 및 실시간 외형 동기화 (최종 안정화)
+    // ===================================================================
+    const _Game_Player_refresh = Game_Player.prototype.refresh;
+    Game_Player.prototype.refresh = function () {
+        // 1. 알만툴 순정 리프레시 로직을 먼저 완벽하게 수행합니다.
+        _Game_Player_refresh.call(this);
+
+        // 2. [핵심] 엔진이 데이터를 완전히 정착시킬 수 있도록 0프레임 지연(setTimeout 0) 처리를 합니다.
+        // 이렇게 하면 빈 문자열("")이 추출되는 타이밍 버그를 완벽히 우회합니다.
+        setTimeout(() => {
+            if (typeof isLoggedIn !== 'undefined' && isLoggedIn && socket && socket.readyState === WebSocket.OPEN && $gameMap) {
+
+                let currentName = this.characterName();
+                let currentIndex = this.characterIndex();
+
+                // 3. [2중 방어] 만약 여전히 공백이거나 누락되었다면, 데이터베이스 1번 파티원의 진짜 외형을 역추적합니다.
+                if (!currentName && $gameParty.leader()) {
+                    currentName = $gameParty.leader().characterName();
+                    currentIndex = $gameParty.leader().characterIndex();
+                }
+
+                // 데이터가 유효할 때만 최종적으로 패킷을 발송합니다.
+                if (currentName) {
+                    socket.send(JSON.stringify({
+                        type: 'MOVE',
+                        mapId: $gameMap.mapId(),
+                        x: this.x,
+                        y: this.y,
+                        d: this.direction(),
+                        characterName: currentName,
+                        characterIndex: currentIndex,
+                        moveSpeed: this.realMoveSpeed()
+                    }));
+
+                    console.log(`[Network] 순정 이벤트 최종 동기화 완료: ${currentName}(${currentIndex})`);
+                }
+            }
+        }, 0);
+    };
+
 })();

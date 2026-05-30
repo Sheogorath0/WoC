@@ -166,20 +166,22 @@ wss.on('connection', (ws) => {
 });
 
 // 자동 배치 세이브 (5초 주기)
+// 현재 서버의 자동 세이브 로직 (원인 구간)
 setInterval(() => {
     if (Object.keys(activePlayers).length === 0) return;
+
     delete require.cache[require.resolve('./userdata.js')];
     const userDatabase = require('./userdata.js');
-    let isChanged = false;
+
     for (const id in activePlayers) {
         if (userDatabase[id]) {
+            // 5초마다 메모리(RAM)에 있는 mapId, x, y를 userdata.js 파일에 덮어씁니다.
             userDatabase[id].mapId = activePlayers[id].mapId;
             userDatabase[id].x = activePlayers[id].x;
             userDatabase[id].y = activePlayers[id].y;
-            isChanged = true;
         }
     }
-    if (isChanged) saveUserData(userDatabase);
+    saveUserData(userDatabase);
 }, 5000);
 
 // [기본] 내 현재 메모리상 맵 ID와 일치하는 유저들에게 방송하는 함수
