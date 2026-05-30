@@ -3,22 +3,25 @@ const userDatabase = {
     "password": "123",
     "characterName": "Actor1",
     "characterIndex": 0,
-    "x": 16,
-    "y": 0
+    "x": 8,
+    "y": 4,
+    "mapId": 1
   },
   "player1": {
     "password": "123",
     "characterName": "Actor2",
     "characterIndex": 1,
-    "x": 9,
-    "y": 3
+    "x": 3,
+    "y": 3,
+    "mapId": 1
   },
   "player2": {
     "password": "123",
     "characterName": "Actor3",
     "characterIndex": 2,
-    "x": 10,
-    "y": 12
+    "x": 7,
+    "y": 5,
+    "mapId": 1
   }
 };
 
