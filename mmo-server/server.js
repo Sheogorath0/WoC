@@ -92,6 +92,11 @@ wss.on('connection', (ws) => {
                 activePlayers[myUserId].d = packet.d;
                 activePlayers[myUserId].moveSpeed = packet.moveSpeed;
 
+                // [버그 수정] 클라이언트가 갱신해서 보낸 '새로운 외형 데이터'를 서버 메모리에도 반영해야 
+                // 다른 플레이어들에게 제대로 전달(broadcast)됩니다.
+                if (packet.characterName !== undefined) activePlayers[myUserId].characterName = packet.characterName;
+                if (packet.characterIndex !== undefined) activePlayers[myUserId].characterIndex = packet.characterIndex;
+
                 // 만약 유저가 포탈을 타고 "방을 이동하는 패킷"인 경우
                 if (oldMapId !== newMapId) {
                     // 원래 있던 방(이전 맵)에 남아있는 사람들에게 
@@ -151,6 +156,8 @@ wss.on('connection', (ws) => {
                 userDatabase[myUserId].mapId = activePlayers[myUserId].mapId;
                 userDatabase[myUserId].x = activePlayers[myUserId].x;
                 userDatabase[myUserId].y = activePlayers[myUserId].y;
+                if (activePlayers[myUserId].characterName !== undefined) userDatabase[myUserId].characterName = activePlayers[myUserId].characterName;
+                if (activePlayers[myUserId].characterIndex !== undefined) userDatabase[myUserId].characterIndex = activePlayers[myUserId].characterIndex;
                 saveUserData(userDatabase);
             }
 
@@ -175,10 +182,12 @@ setInterval(() => {
 
     for (const id in activePlayers) {
         if (userDatabase[id]) {
-            // 5초마다 메모리(RAM)에 있는 mapId, x, y를 userdata.js 파일에 덮어씁니다.
+            // 5초마다 메모리(RAM)에 있는 mapId, x, y, characterName, characterIndex를 userdata.js 파일에 덮어씁니다.
             userDatabase[id].mapId = activePlayers[id].mapId;
             userDatabase[id].x = activePlayers[id].x;
             userDatabase[id].y = activePlayers[id].y;
+            if (activePlayers[id].characterName !== undefined) userDatabase[id].characterName = activePlayers[id].characterName;
+            if (activePlayers[id].characterIndex !== undefined) userDatabase[id].characterIndex = activePlayers[id].characterIndex;
         }
     }
     saveUserData(userDatabase);
