@@ -198,22 +198,29 @@ wss.on('connection', (ws) => {
                 }));
             }
             else if (packet.type === 'AUCTION_REGISTER' && myUserId) {
-                // 인벤토리 검증 (무기가 있는지)
+                // 인벤토리 검증 (아이템 종류에 따라 검증)
                 const itemId = packet.itemId;
                 const price = packet.price;
-                if (activePlayers[myUserId] && activePlayers[myUserId].weapons[itemId] > 0 && price > 0) {
-                    activePlayers[myUserId].weapons[itemId]--;
+                const quantity = Math.max(1, packet.quantity || 1);
+                const itemType = packet.itemType || 'weapon'; // 'weapon', 'armor', 'item'
+                
+                const collectionName = itemType === 'weapon' ? 'weapons' : (itemType === 'armor' ? 'armors' : 'items');
+                
+                if (activePlayers[myUserId] && activePlayers[myUserId][collectionName] && activePlayers[myUserId][collectionName][itemId] >= quantity && price > 0) {
+                    activePlayers[myUserId][collectionName][itemId] -= quantity;
                     
                     const newAuction = {
                         id: auctionIdCounter++,
                         sellerId: myUserId,
                         itemId: itemId,
-                        price: price,
+                        itemType: itemType,
+                        price: price, // 개당 가격
+                        quantity: quantity, // 등록 수량
                         timestamp: Date.now()
                     };
                     auctionDatabase.push(newAuction);
                     
-                    ws.send(JSON.stringify({ type: 'AUCTION_REGISTER_SUCCESS', itemId: itemId }));
+                    ws.send(JSON.stringify({ type: 'AUCTION_REGISTER_SUCCESS', itemId: itemId, itemType: itemType, quantity: quantity }));
                     
                     // 전체 유저에게 리스트 갱신 알림
                     wss.clients.forEach((client) => {
@@ -222,40 +229,55 @@ wss.on('connection', (ws) => {
                         }
                     });
                 } else {
-                    ws.send(JSON.stringify({ type: 'AUCTION_FAIL', message: '무기가 없거나 가격이 올바르지 않습니다.' }));
+                    ws.send(JSON.stringify({ type: 'AUCTION_FAIL', message: '아이템이 부족하거나 가격이 올바르지 않습니다.' }));
                 }
             }
             else if (packet.type === 'AUCTION_BUY' && myUserId) {
                 const auctionId = packet.auctionId;
+                const buyQuantity = Math.max(1, packet.buyQuantity || 1);
                 const auctionIndex = auctionDatabase.findIndex(a => a.id === auctionId);
                 
                 if (auctionIndex !== -1) {
                     const auctionItem = auctionDatabase[auctionIndex];
-                    if (activePlayers[myUserId] && activePlayers[myUserId].gold >= auctionItem.price) {
-                        // 골드 차감 및 무기 지급
-                        activePlayers[myUserId].gold -= auctionItem.price;
-                        activePlayers[myUserId].weapons[auctionItem.itemId] = (activePlayers[myUserId].weapons[auctionItem.itemId] || 0) + 1;
-                        
-                        // 판매자 대금 보관
-                        auctionPendingIncome[auctionItem.sellerId] = (auctionPendingIncome[auctionItem.sellerId] || 0) + auctionItem.price;
-                        
-                        // 리스트에서 제거
-                        auctionDatabase.splice(auctionIndex, 1);
-                        
-                        ws.send(JSON.stringify({ type: 'AUCTION_BUY_SUCCESS', itemId: auctionItem.itemId, price: auctionItem.price }));
-                        
-                        // 판매자가 접속 중이면 즉시 알림
-                        wss.clients.forEach((client) => {
-                            if (client.readyState === 1) {
-                                client.send(JSON.stringify({ type: 'AUCTION_UPDATE', list: auctionDatabase }));
-                                // 판매자에게만 별도 알림 (선택적)
+                    if (auctionItem.quantity >= buyQuantity) {
+                        const totalPrice = auctionItem.price * buyQuantity;
+                        if (activePlayers[myUserId] && activePlayers[myUserId].gold >= totalPrice) {
+                            // 골드 차감 및 아이템 지급
+                            activePlayers[myUserId].gold -= totalPrice;
+                            const collectionName = auctionItem.itemType === 'weapon' ? 'weapons' : (auctionItem.itemType === 'armor' ? 'armors' : 'items');
+                            activePlayers[myUserId][collectionName][auctionItem.itemId] = (activePlayers[myUserId][collectionName][auctionItem.itemId] || 0) + buyQuantity;
+                            
+                            // 판매자 대금 보관
+                            auctionPendingIncome[auctionItem.sellerId] = (auctionPendingIncome[auctionItem.sellerId] || 0) + totalPrice;
+                            
+                            // 수량 차감 및 리스트 갱신
+                            auctionItem.quantity -= buyQuantity;
+                            if (auctionItem.quantity <= 0) {
+                                auctionDatabase.splice(auctionIndex, 1);
                             }
-                        });
+                            
+                            ws.send(JSON.stringify({ 
+                                type: 'AUCTION_BUY_SUCCESS', 
+                                itemId: auctionItem.itemId, 
+                                itemType: auctionItem.itemType,
+                                quantity: buyQuantity, 
+                                price: totalPrice 
+                            }));
+                            
+                            // 판매자/전체 유저에게 리스트 갱신 알림
+                            wss.clients.forEach((client) => {
+                                if (client.readyState === 1) {
+                                    client.send(JSON.stringify({ type: 'AUCTION_UPDATE', list: auctionDatabase }));
+                                }
+                            });
+                        } else {
+                            ws.send(JSON.stringify({ type: 'AUCTION_FAIL', message: '골드가 부족합니다.' }));
+                        }
                     } else {
-                        ws.send(JSON.stringify({ type: 'AUCTION_FAIL', message: '골드가 부족합니다.' }));
+                        ws.send(JSON.stringify({ type: 'AUCTION_FAIL', message: '구매하려는 수량이 남은 수량보다 많습니다.' }));
                     }
                 } else {
-                    ws.send(JSON.stringify({ type: 'AUCTION_FAIL', message: '이미 판매된 물품입니다.' }));
+                    ws.send(JSON.stringify({ type: 'AUCTION_FAIL', message: '이미 판매 완료된 물품입니다.' }));
                 }
             }
             else if (packet.type === 'AUCTION_CLAIM' && myUserId) {

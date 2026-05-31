@@ -148,22 +148,7 @@
         }
     };
 
-    function Sprite_NetNameTag() { this.initialize(...arguments); }
-    Sprite_NetNameTag.prototype = Object.create(Sprite.prototype);
-    Sprite_NetNameTag.prototype.constructor = Sprite_NetNameTag;
-    Sprite_NetNameTag.prototype.initialize = function (userId) {
-        Sprite.prototype.initialize.call(this);
-        this._userId = userId;
-        this.bitmap = new Bitmap(120, 30);
-        this.bitmap.fontFace = $gameSystem.mainFontFace();
-        this.bitmap.fontSize = 14;
-        this.bitmap.textColor = "#ffffff";
-        this.bitmap.outlineColor = "#000000";
-        this.bitmap.outlineWidth = 4;
-        this.bitmap.drawText(this._userId, 0, 0, 120, 30, "center");
-        this.anchor.x = 0.5;
-        this.anchor.y = 1.0;
-    };
+    // Sprite_NetNameTag은 RS_EventName.js 플러그인에서 보다 향상된 형태로 처리하므로 더 이상 NetCoreMZ.js에서 직접 그리지 않습니다.
 
     const _Scene_Map_update = Scene_Map.prototype.update;
     Scene_Map.prototype.update = function () {
@@ -338,14 +323,33 @@
 
             case 'AUCTION_REGISTER_SUCCESS':
                 SoundManager.playShop();
+                // 서버에서 등록 성공했으므로 클라이언트 인벤토리에서도 동기화 생략 상태에서 차감 처리
+                _isSyncingInventoryFromServer = true;
+                {
+                    let db = $dataWeapons;
+                    if (packet.itemType === 'armor') db = $dataArmors;
+                    if (packet.itemType === 'item') db = $dataItems;
+                    $gameParty.loseItem(db[packet.itemId], packet.quantity || 1);
+                }
+                _isSyncingInventoryFromServer = false;
+                
+                // 경매장 씬 활성화 시 판매 인벤토리 목록을 즉시 갱신
+                if (SceneManager._scene && SceneManager._scene.constructor.name === "Scene_Auction" && typeof SceneManager._scene.refreshSellWindow === "function") {
+                    SceneManager._scene.refreshSellWindow();
+                }
                 break;
 
             case 'AUCTION_BUY_SUCCESS':
                 SoundManager.playShop();
-                // 이미 서버에서 골드를 깎고 무기를 지급했지만 클라이언트 엔진 반영을 위해 동기화 생략 후 로컬 갱신
+                // 이미 서버에서 골드를 깎고 아이템을 지급했지만 클라이언트 엔진 반영을 위해 동기화 생략 후 로컬 갱신
                 _isSyncingInventoryFromServer = true;
                 $gameParty.loseGold(packet.price);
-                $gameParty.gainItem($dataWeapons[packet.itemId], 1);
+                {
+                    let db = $dataWeapons;
+                    if (packet.itemType === 'armor') db = $dataArmors;
+                    if (packet.itemType === 'item') db = $dataItems;
+                    $gameParty.gainItem(db[packet.itemId], packet.quantity || 1);
+                }
                 _isSyncingInventoryFromServer = false;
                 break;
 
@@ -405,9 +409,7 @@
         spriteset._tilemap.addChild(sprite);
         netPlayer._sprite = sprite;
 
-        const nameTag = new Sprite_NetNameTag(netPlayer._userId);
-        nameTag.y = -48;
-        sprite.addChild(nameTag);
+        // NameTag 처리는 RS_EventName.js가 담당하므로 여기서는 삭제
         
         // ⚔️ [전투 동기화] 아이콘 스프라이트 부착
         const battleIcon = new Sprite_BattleIcon();
