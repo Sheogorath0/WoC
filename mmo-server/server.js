@@ -55,7 +55,8 @@ wss.on('connection', (ws) => {
                         d: 2,
                         characterName: user.characterName,
                         characterIndex: user.characterIndex,
-                        moveSpeed: 4
+                        moveSpeed: 4,
+                        inBattle: false
                     };
 
                     ws.send(JSON.stringify({
@@ -113,6 +114,26 @@ wss.on('connection', (ws) => {
                         type: 'UPDATE_POSITION',
                         id: myUserId,
                         ...activePlayers[myUserId]
+                    });
+                }
+            }
+            else if (packet.type === 'BATTLE_START' && myUserId) {
+                if (activePlayers[myUserId]) {
+                    activePlayers[myUserId].inBattle = true;
+                    broadcast(myUserId, {
+                        type: 'PLAYER_BATTLE_STATUS',
+                        userId: myUserId,
+                        isFighting: true
+                    });
+                }
+            }
+            else if (packet.type === 'BATTLE_END' && myUserId) {
+                if (activePlayers[myUserId]) {
+                    activePlayers[myUserId].inBattle = false;
+                    broadcast(myUserId, {
+                        type: 'PLAYER_BATTLE_STATUS',
+                        userId: myUserId,
+                        isFighting: false
                     });
                 }
             }

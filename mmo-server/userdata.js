@@ -10,17 +10,17 @@ const userDatabase = {
     "password": "123",
     "actorId": 2,
     "mapId": 2,
-    "x": 11,
-    "y": 9,
+    "x": 10,
+    "y": 2,
     "characterName": "Actor1",
-    "characterIndex": 1
+    "characterIndex": 0
   },
   "player2": {
     "password": "123",
     "actorId": 3,
     "mapId": 2,
-    "x": 0,
-    "y": 0,
+    "x": 2,
+    "y": 2,
     "characterName": "Actor1",
     "characterIndex": 0
   }

@@ -38,6 +38,18 @@
         this.setThrough(true);
         this.setStepAnime(true);
         this._sprite = null;
+        
+        // ⚔️ [전투 동기화] 전투 아이콘 스프라이트 및 전투 상태 변수
+        this._battleIconSprite = null;
+        this._isFighting = data ? !!data.inBattle : false;
+    };
+    
+    // ⚔️ [전투 동기화] 상태 갱신 함수
+    Game_NetPlayer.prototype.setBattleStatus = function (isFighting) {
+        this._isFighting = isFighting;
+        if (this._battleIconSprite) {
+            this._battleIconSprite.visible = isFighting;
+        }
     };
     Game_NetPlayer.prototype.updateData = function (data) {
         if (!data) return;
@@ -72,6 +84,65 @@
                     mySprite.update();
                 }
             }
+        }
+        
+        // ⚔️ [전투 동기화] 전투 상태 갱신
+        if (data.inBattle !== undefined) {
+            this.setBattleStatus(data.inBattle);
+        }
+    };
+
+    // ⚔️ [전투 동기화] 말풍선 위에 띄울 전투 아이콘 클래스 (역동적인 애니메이션 업그레이드)
+    function Sprite_BattleIcon() { this.initialize(...arguments); }
+    Sprite_BattleIcon.prototype = Object.create(Sprite.prototype);
+    Sprite_BattleIcon.prototype.constructor = Sprite_BattleIcon;
+    Sprite_BattleIcon.prototype.initialize = function () {
+        Sprite.prototype.initialize.call(this);
+        
+        // 더 화려하고 역동적인 연출을 위해 캔버스 크기를 넉넉히 잡습니다.
+        this.bitmap = new Bitmap(80, 80);
+        this.bitmap.fontFace = $gameSystem.mainFontFace();
+        this.bitmap.fontSize = 28;
+        
+        // 붉은 기운의 전투 테두리 효과를 연출하기 위해 그림자 효과 추가
+        const ctx = this.bitmap.context;
+        ctx.shadowColor = "rgba(255, 0, 0, 0.8)";
+        ctx.shadowBlur = 8;
+        
+        // 중앙에 두 개의 칼이 격돌하는 듯한 이모지 묘사
+        this.bitmap.drawText("⚔️", 0, 0, 80, 80, "center");
+        
+        this.anchor.x = 0.5;
+        this.anchor.y = 0.5; // 애니메이션 축을 중앙으로 설정
+        this._baseY = -80;   // 기준 높이 (이름표보다 위로 설정)
+        this.y = this._baseY;
+        this.visible = false;
+        
+        this._tick = 0; // 애니메이션 타이머
+    };
+
+    // 프레임마다 호출되어 화려하고 역동적인 모션을 연출합니다.
+    Sprite_BattleIcon.prototype.update = function () {
+        Sprite.prototype.update.call(this);
+        if (this.visible) {
+            this._tick++;
+
+            // 1. 상하로 부드럽게 둥실둥실 뜨는 효과 (Sine파 이용, 속도를 0.08 -> 0.04로 50% 감속)
+            const floatY = Math.sin(this._tick * 0.04) * 8;
+            
+            // 2. 치열한 격투를 나타내는 좌우 미세 진동 (Cosine파 이용, 속도를 0.4 -> 0.2로 50% 감속)
+            const shakeX = Math.cos(this._tick * 0.2) * 2;
+            
+            this.x = shakeX;
+            this.y = this._baseY + floatY;
+
+            // 3. 심장박동처럼 팽창했다 수축하는 호흡 효과 (속도를 0.15 -> 0.075로 50% 감속)
+            const scale = 1.05 + Math.sin(this._tick * 0.075) * 0.1;
+            this.scale.x = scale;
+            this.scale.y = scale;
+            
+            // 4. 각도를 아주 미세하게 좌우로 흔들어 생동감 강화 (속도를 0.1 -> 0.05로 50% 감속)
+            this.rotation = Math.sin(this._tick * 0.05) * 0.08;
         }
     };
 
@@ -194,6 +265,12 @@
             case 'REMOVE_PLAYER':
                 removeRemotePlayer(packet.id);
                 break;
+
+            case 'PLAYER_BATTLE_STATUS':
+                if (remotePlayers[packet.userId]) {
+                    remotePlayers[packet.userId].setBattleStatus(packet.isFighting);
+                }
+                break;
         }
     }
 
@@ -241,6 +318,16 @@
         const nameTag = new Sprite_NetNameTag(netPlayer._userId);
         nameTag.y = -48;
         sprite.addChild(nameTag);
+        
+        // ⚔️ [전투 동기화] 아이콘 스프라이트 부착
+        const battleIcon = new Sprite_BattleIcon();
+        sprite.addChild(battleIcon);
+        netPlayer._battleIconSprite = battleIcon;
+
+        // 기존에 전투 중이었다면 즉시 보이도록
+        if (netPlayer._isFighting) {
+            battleIcon.visible = true;
+        }
     }
 
     function updateRemotePlayer(userId, data) {
@@ -328,6 +415,30 @@
                 }
             }
         }, 0);
+    };
+
+    // ===================================================================
+    // 5. ⚔️ 전투 상태 동기화
+    // ===================================================================
+
+    // 전투 씬으로 넘어가는 로직 가로채기 (상태 전송)
+    const _SceneManager_push = SceneManager.push;
+    SceneManager.push = function(sceneClass) {
+        if (sceneClass === Scene_Battle) {
+            if (isLoggedIn && socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'BATTLE_START' }));
+            }
+        }
+        _SceneManager_push.call(this, sceneClass);
+    };
+
+    // 전투 종료 감지 (맵으로 복귀할 때)
+    const _Scene_Battle_terminate = Scene_Battle.prototype.terminate;
+    Scene_Battle.prototype.terminate = function() {
+        _Scene_Battle_terminate.call(this);
+        if (isLoggedIn && socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'BATTLE_END' }));
+        }
     };
 
 })();
