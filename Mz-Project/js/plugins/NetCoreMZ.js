@@ -12,6 +12,8 @@
     let titleSceneRef = null;
 
     let remotePlayers = {};
+    let _isSyncingFromServer = false;
+    let _isSyncingInventoryFromServer = false;
 
     // ===================================================================
     // 1. 순수 네트워크 캐릭터 클래스 및 이름표
@@ -216,6 +218,43 @@
                 myNetId = packet.id;
 
                 DataManager.setupNewGame();
+
+                // 🛠️ [개인/공유 스위치 및 변수 복구]
+                _isSyncingFromServer = true;
+                if (packet.switches) {
+                    for (const id in packet.switches) {
+                        $gameSwitches.setValue(Number(id), packet.switches[id]);
+                    }
+                }
+                if (packet.variables) {
+                    for (const id in packet.variables) {
+                        $gameVariables.setValue(Number(id), packet.variables[id]);
+                    }
+                }
+                if (packet.sharedSwitches) {
+                    for (const id in packet.sharedSwitches) {
+                        $gameSwitches.setValue(Number(id), packet.sharedSwitches[id]);
+                    }
+                }
+                if (packet.sharedVariables) {
+                    for (const id in packet.sharedVariables) {
+                        $gameVariables.setValue(Number(id), packet.sharedVariables[id]);
+                    }
+                }
+                _isSyncingFromServer = false;
+
+                // 🛠️ [골드 및 인벤토리 데이터 복구]
+                _isSyncingInventoryFromServer = true;
+                if (packet.gold !== undefined) $gameParty._gold = packet.gold;
+                if (packet.weapons) $gameParty._weapons = packet.weapons;
+                if (packet.armors) $gameParty._armors = packet.armors;
+                if (packet.items) $gameParty._items = packet.items;
+                _isSyncingInventoryFromServer = false;
+
+                // 🛠️ [경매장 전역 객체 초기화]
+                window.$gameAuction = window.$gameAuction || { list: [], pendingIncome: 0 };
+                window.$gameAuction.pendingIncome = packet.pendingIncome || 0;
+
                 $gamePlayer.reserveTransfer(packet.mapId || 1, packet.x, packet.y, 2, 0);
 
                 // 🛠️ [split 에러 완벽 차단 안전장치]
@@ -270,6 +309,57 @@
                 if (remotePlayers[packet.userId]) {
                     remotePlayers[packet.userId].setBattleStatus(packet.isFighting);
                 }
+                break;
+
+            case 'SYNC_SHARED_DATA':
+                _isSyncingFromServer = true;
+                if (packet.isSwitch) {
+                    $gameSwitches.setValue(packet.id, packet.value);
+                } else {
+                    $gameVariables.setValue(packet.id, packet.value);
+                }
+                _isSyncingFromServer = false;
+
+                // 실시간 스위치/변수 업데이트에 반응하도록 맵 이벤트들을 즉시 갱신
+                if ($gameMap) {
+                    $gameMap.requestRefresh();
+                }
+                break;
+
+            case 'AUCTION_LIST_RESPONSE':
+            case 'AUCTION_UPDATE':
+                if (window.$gameAuction) {
+                    window.$gameAuction.list = packet.list;
+                    if (packet.pendingIncome !== undefined) {
+                        window.$gameAuction.pendingIncome = packet.pendingIncome;
+                    }
+                }
+                break;
+
+            case 'AUCTION_REGISTER_SUCCESS':
+                SoundManager.playShop();
+                break;
+
+            case 'AUCTION_BUY_SUCCESS':
+                SoundManager.playShop();
+                // 이미 서버에서 골드를 깎고 무기를 지급했지만 클라이언트 엔진 반영을 위해 동기화 생략 후 로컬 갱신
+                _isSyncingInventoryFromServer = true;
+                $gameParty.loseGold(packet.price);
+                $gameParty.gainItem($dataWeapons[packet.itemId], 1);
+                _isSyncingInventoryFromServer = false;
+                break;
+
+            case 'AUCTION_CLAIM_SUCCESS':
+                SoundManager.playShop();
+                _isSyncingInventoryFromServer = true;
+                $gameParty.gainGold(packet.amount);
+                _isSyncingInventoryFromServer = false;
+                if (window.$gameAuction) window.$gameAuction.pendingIncome = 0;
+                break;
+
+            case 'AUCTION_FAIL':
+                SoundManager.playBuzzer();
+                console.warn("경매장 에러:", packet.message);
                 break;
         }
     }
@@ -438,6 +528,120 @@
         _Scene_Battle_terminate.call(this);
         if (isLoggedIn && socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'BATTLE_END' }));
+        }
+    };
+
+    // ===================================================================
+    // 6. 스위치 및 변수 멀티플레이어 실시간 동기화 시스템
+    // ===================================================================
+    // 101번 ~ 200번 범위는 모든 플레이어 간 실시간 동기화되는 [공유 데이터] 영역입니다.
+    // 그 외 범위는 각 플레이어의 세션 프로필 데이터에 독립 저장되는 [개인 데이터] 영역입니다.
+    const SHARED_SWITCH_START = 101;
+    const SHARED_SWITCH_END = 200;
+    const SHARED_VAR_START = 101;
+    const SHARED_VAR_END = 200;
+
+    function isSharedSwitch(id) {
+        return id >= SHARED_SWITCH_START && id <= SHARED_SWITCH_END;
+    }
+
+    function isSharedVariable(id) {
+        return id >= SHARED_VAR_START && id <= SHARED_VAR_END;
+    }
+
+    const _Game_Switches_setValue = Game_Switches.prototype.setValue;
+    Game_Switches.prototype.setValue = function(switchId, value) {
+        const oldValue = this.value(switchId);
+        _Game_Switches_setValue.call(this, switchId, value);
+        
+        if (oldValue !== value && !_isSyncingFromServer && isLoggedIn) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                if (isSharedSwitch(switchId)) {
+                    // 공유 스위치 전송 (실시간 전체 공유)
+                    socket.send(JSON.stringify({
+                        type: 'SYNC_SHARED_DATA',
+                        isSwitch: true,
+                        id: switchId,
+                        value: value
+                    }));
+                } else {
+                    // 개인 스위치 전송 (서버 데이터 세이브용)
+                    socket.send(JSON.stringify({
+                        type: 'SYNC_PERSONAL_DATA',
+                        isSwitch: true,
+                        id: switchId,
+                        value: value
+                    }));
+                }
+            }
+        }
+    };
+
+    const _Game_Variables_setValue = Game_Variables.prototype.setValue;
+    Game_Variables.prototype.setValue = function(variableId, value) {
+        const oldValue = this.value(variableId);
+        _Game_Variables_setValue.call(this, variableId, value);
+        
+        if (oldValue !== value && !_isSyncingFromServer && isLoggedIn) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                if (isSharedVariable(variableId)) {
+                    // 공유 변수 전송 (실시간 전체 공유)
+                    socket.send(JSON.stringify({
+                        type: 'SYNC_SHARED_DATA',
+                        isSwitch: false,
+                        id: variableId,
+                        value: value
+                    }));
+                } else {
+                    // 개인 변수 전송 (서버 데이터 세이브용)
+                    socket.send(JSON.stringify({
+                        type: 'SYNC_PERSONAL_DATA',
+                        isSwitch: false,
+                        id: variableId,
+                        value: value
+                    }));
+                }
+            }
+        }
+    };
+
+    // ===================================================================
+    // 7. 인벤토리 및 골드 실시간 서버 저장 시스템 (경매장 기반)
+    // ===================================================================
+    const _Game_Party_gainGold = Game_Party.prototype.gainGold;
+    Game_Party.prototype.gainGold = function(amount) {
+        _Game_Party_gainGold.call(this, amount);
+        if (!_isSyncingInventoryFromServer && isLoggedIn && socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'SYNC_GOLD', gold: this._gold }));
+        }
+    };
+
+    const _Game_Party_loseGold = Game_Party.prototype.loseGold;
+    Game_Party.prototype.loseGold = function(amount) {
+        _Game_Party_loseGold.call(this, amount);
+        if (!_isSyncingInventoryFromServer && isLoggedIn && socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'SYNC_GOLD', gold: this._gold }));
+        }
+    };
+
+    const _Game_Party_gainItem = Game_Party.prototype.gainItem;
+    Game_Party.prototype.gainItem = function(item, amount, includeEquip) {
+        _Game_Party_gainItem.call(this, item, amount, includeEquip);
+        if (!_isSyncingInventoryFromServer && isLoggedIn && socket && socket.readyState === WebSocket.OPEN && item) {
+            socket.send(JSON.stringify({
+                type: 'SYNC_INVENTORY',
+                weapons: this._weapons,
+                armors: this._armors,
+                items: this._items
+            }));
+        }
+    };
+
+    // 경매장 UI 플러그인 등 외부에서 서버로 패킷을 쏠 수 있는 전역 인터페이스
+    window.$gameAuction = window.$gameAuction || { list: [], pendingIncome: 0 };
+    window.$gameAuction.sendPacket = function(packet) {
+        if (isLoggedIn && socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(packet));
         }
     };
 

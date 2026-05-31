@@ -16,6 +16,13 @@ function saveUserData(data) {
 }
 
 const activePlayers = {};
+const globalSharedSwitches = {};
+const globalSharedVariables = {};
+
+// 경매장 전역 데이터베이스
+const auctionDatabase = []; // { id, sellerId, itemId, price, timestamp } 구조의 리스트
+const auctionPendingIncome = {}; // { userId: goldAmount } 구조
+let auctionIdCounter = 1;
 
 console.log("=========================================");
 console.log("MZ MMORPG 14단계 (잔상 버그 완전 소멸 빌드) 구동 중...");
@@ -56,7 +63,13 @@ wss.on('connection', (ws) => {
                         characterName: user.characterName,
                         characterIndex: user.characterIndex,
                         moveSpeed: 4,
-                        inBattle: false
+                        inBattle: false,
+                        switches: user.switches || {},
+                        variables: user.variables || {},
+                        gold: user.gold || 0,
+                        weapons: user.weapons || {},
+                        armors: user.armors || {},
+                        items: user.items || {}
                     };
 
                     ws.send(JSON.stringify({
@@ -67,7 +80,16 @@ wss.on('connection', (ws) => {
                         y: currentY,
                         characterName: user.characterName,
                         characterIndex: user.characterIndex,
-                        existingPlayers: activePlayers
+                        existingPlayers: activePlayers,
+                        switches: user.switches || {},
+                        variables: user.variables || {},
+                        sharedSwitches: globalSharedSwitches,
+                        sharedVariables: globalSharedVariables,
+                        gold: user.gold || 0,
+                        weapons: user.weapons || {},
+                        armors: user.armors || {},
+                        items: user.items || {},
+                        pendingIncome: auctionPendingIncome[myUserId] || 0
                     }));
 
                     // 입장 시 동일 맵 유저들에게 방송
@@ -137,6 +159,126 @@ wss.on('connection', (ws) => {
                     });
                 }
             }
+            else if (packet.type === 'SYNC_SHARED_DATA' && myUserId) {
+                if (packet.isSwitch) {
+                    globalSharedSwitches[packet.id] = packet.value;
+                } else {
+                    globalSharedVariables[packet.id] = packet.value;
+                }
+
+                // 모든 클라이언트들에게 실시간 브로드캐스트
+                wss.clients.forEach((client) => {
+                    if (client.readyState === 1) {
+                        client.send(JSON.stringify({
+                            type: 'SYNC_SHARED_DATA',
+                            isSwitch: packet.isSwitch,
+                            id: packet.id,
+                            value: packet.value
+                        }));
+                    }
+                });
+            }
+            else if (packet.type === 'SYNC_GOLD' && myUserId) {
+                if (activePlayers[myUserId]) {
+                    activePlayers[myUserId].gold = packet.gold;
+                }
+            }
+            else if (packet.type === 'SYNC_INVENTORY' && myUserId) {
+                if (activePlayers[myUserId]) {
+                    activePlayers[myUserId].weapons = packet.weapons;
+                    activePlayers[myUserId].armors = packet.armors;
+                    activePlayers[myUserId].items = packet.items;
+                }
+            }
+            else if (packet.type === 'AUCTION_LIST_REQUEST' && myUserId) {
+                ws.send(JSON.stringify({
+                    type: 'AUCTION_LIST_RESPONSE',
+                    list: auctionDatabase,
+                    pendingIncome: auctionPendingIncome[myUserId] || 0
+                }));
+            }
+            else if (packet.type === 'AUCTION_REGISTER' && myUserId) {
+                // 인벤토리 검증 (무기가 있는지)
+                const itemId = packet.itemId;
+                const price = packet.price;
+                if (activePlayers[myUserId] && activePlayers[myUserId].weapons[itemId] > 0 && price > 0) {
+                    activePlayers[myUserId].weapons[itemId]--;
+                    
+                    const newAuction = {
+                        id: auctionIdCounter++,
+                        sellerId: myUserId,
+                        itemId: itemId,
+                        price: price,
+                        timestamp: Date.now()
+                    };
+                    auctionDatabase.push(newAuction);
+                    
+                    ws.send(JSON.stringify({ type: 'AUCTION_REGISTER_SUCCESS', itemId: itemId }));
+                    
+                    // 전체 유저에게 리스트 갱신 알림
+                    wss.clients.forEach((client) => {
+                        if (client.readyState === 1) {
+                            client.send(JSON.stringify({ type: 'AUCTION_UPDATE', list: auctionDatabase }));
+                        }
+                    });
+                } else {
+                    ws.send(JSON.stringify({ type: 'AUCTION_FAIL', message: '무기가 없거나 가격이 올바르지 않습니다.' }));
+                }
+            }
+            else if (packet.type === 'AUCTION_BUY' && myUserId) {
+                const auctionId = packet.auctionId;
+                const auctionIndex = auctionDatabase.findIndex(a => a.id === auctionId);
+                
+                if (auctionIndex !== -1) {
+                    const auctionItem = auctionDatabase[auctionIndex];
+                    if (activePlayers[myUserId] && activePlayers[myUserId].gold >= auctionItem.price) {
+                        // 골드 차감 및 무기 지급
+                        activePlayers[myUserId].gold -= auctionItem.price;
+                        activePlayers[myUserId].weapons[auctionItem.itemId] = (activePlayers[myUserId].weapons[auctionItem.itemId] || 0) + 1;
+                        
+                        // 판매자 대금 보관
+                        auctionPendingIncome[auctionItem.sellerId] = (auctionPendingIncome[auctionItem.sellerId] || 0) + auctionItem.price;
+                        
+                        // 리스트에서 제거
+                        auctionDatabase.splice(auctionIndex, 1);
+                        
+                        ws.send(JSON.stringify({ type: 'AUCTION_BUY_SUCCESS', itemId: auctionItem.itemId, price: auctionItem.price }));
+                        
+                        // 판매자가 접속 중이면 즉시 알림
+                        wss.clients.forEach((client) => {
+                            if (client.readyState === 1) {
+                                client.send(JSON.stringify({ type: 'AUCTION_UPDATE', list: auctionDatabase }));
+                                // 판매자에게만 별도 알림 (선택적)
+                            }
+                        });
+                    } else {
+                        ws.send(JSON.stringify({ type: 'AUCTION_FAIL', message: '골드가 부족합니다.' }));
+                    }
+                } else {
+                    ws.send(JSON.stringify({ type: 'AUCTION_FAIL', message: '이미 판매된 물품입니다.' }));
+                }
+            }
+            else if (packet.type === 'AUCTION_CLAIM' && myUserId) {
+                const income = auctionPendingIncome[myUserId] || 0;
+                if (income > 0) {
+                    if (activePlayers[myUserId]) {
+                        activePlayers[myUserId].gold += income;
+                        auctionPendingIncome[myUserId] = 0;
+                        ws.send(JSON.stringify({ type: 'AUCTION_CLAIM_SUCCESS', amount: income }));
+                    }
+                } else {
+                    ws.send(JSON.stringify({ type: 'AUCTION_FAIL', message: '수령할 대금이 없습니다.' }));
+                }
+            }
+            else if (packet.type === 'SYNC_PERSONAL_DATA' && myUserId) {
+                if (activePlayers[myUserId]) {
+                    if (packet.isSwitch) {
+                        activePlayers[myUserId].switches[packet.id] = packet.value;
+                    } else {
+                        activePlayers[myUserId].variables[packet.id] = packet.value;
+                    }
+                }
+            }
             else if (packet.type === 'MAP_CHANGED' && myUserId) {
                 activePlayers[myUserId].mapId = packet.mapId;
                 activePlayers[myUserId].x = packet.x;
@@ -179,6 +321,17 @@ wss.on('connection', (ws) => {
                 userDatabase[myUserId].y = activePlayers[myUserId].y;
                 if (activePlayers[myUserId].characterName !== undefined) userDatabase[myUserId].characterName = activePlayers[myUserId].characterName;
                 if (activePlayers[myUserId].characterIndex !== undefined) userDatabase[myUserId].characterIndex = activePlayers[myUserId].characterIndex;
+                
+                // 개인 스위치/변수 상태 파일 저장
+                userDatabase[myUserId].switches = activePlayers[myUserId].switches || {};
+                userDatabase[myUserId].variables = activePlayers[myUserId].variables || {};
+                
+                // 골드 및 인벤토리 최종 저장
+                if (activePlayers[myUserId].gold !== undefined) userDatabase[myUserId].gold = activePlayers[myUserId].gold;
+                if (activePlayers[myUserId].weapons) userDatabase[myUserId].weapons = activePlayers[myUserId].weapons;
+                if (activePlayers[myUserId].armors) userDatabase[myUserId].armors = activePlayers[myUserId].armors;
+                if (activePlayers[myUserId].items) userDatabase[myUserId].items = activePlayers[myUserId].items;
+                
                 saveUserData(userDatabase);
             }
 
@@ -203,12 +356,22 @@ setInterval(() => {
 
     for (const id in activePlayers) {
         if (userDatabase[id]) {
-            // 5초마다 메모리(RAM)에 있는 mapId, x, y, characterName, characterIndex를 userdata.js 파일에 덮어씁니다.
+            // 5초마다 메모리(RAM)에 있는 데이터를 userdata.js 파일에 덮어씁니다.
             userDatabase[id].mapId = activePlayers[id].mapId;
             userDatabase[id].x = activePlayers[id].x;
             userDatabase[id].y = activePlayers[id].y;
             if (activePlayers[id].characterName !== undefined) userDatabase[id].characterName = activePlayers[id].characterName;
             if (activePlayers[id].characterIndex !== undefined) userDatabase[id].characterIndex = activePlayers[id].characterIndex;
+            
+            // 자동 세이브 시 개인 스위치/변수 반영
+            userDatabase[id].switches = activePlayers[id].switches || {};
+            userDatabase[id].variables = activePlayers[id].variables || {};
+            
+            // 골드 및 인벤토리 자동 저장
+            if (activePlayers[id].gold !== undefined) userDatabase[id].gold = activePlayers[id].gold;
+            if (activePlayers[id].weapons) userDatabase[id].weapons = activePlayers[id].weapons;
+            if (activePlayers[id].armors) userDatabase[id].armors = activePlayers[id].armors;
+            if (activePlayers[id].items) userDatabase[id].items = activePlayers[id].items;
         }
     }
     saveUserData(userDatabase);
