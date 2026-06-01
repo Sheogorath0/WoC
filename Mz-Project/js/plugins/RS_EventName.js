@@ -526,6 +526,7 @@
 
         initMembers(data) {
             this._member = data.member;
+            this._characterSprite = data.characterSprite;
             this._prevName = "";
         }
 
@@ -678,6 +679,12 @@
         updateRotation() { }
 
         update() {
+            if (this._characterSprite && (this._characterSprite.destroyed || !this._characterSprite.parent)) {
+                if (this.parent) {
+                    this.parent.removeChild(this);
+                }
+                return;
+            }
             super.update();
             this.updatePosition();
             this.updateVisibility();
@@ -762,7 +769,7 @@
         }
 
         isReady() {
-            return !this.isTransparent() && RS.EventName.Params.showPlayerText === "true";
+            return !this.isTransparent();
         }
 
         obtainName() {
@@ -846,7 +853,8 @@
                         RS.EventName.Params.nameAnchor.y
                     ),
                     textSize: RS.EventName.Params.textSize,
-                    member: character
+                    member: character,
+                    characterSprite: this
                 };
 
                 let shouldAdd = false;
@@ -960,6 +968,9 @@
     };
 
     Spriteset_Map.prototype.createNameLayer = function () {
+        if (this._nameLayer) {
+            this.removeNameLayer();
+        }
         // Create Name Layer
         this._nameLayer = new Sprite();
         this._nameLayer.setFrame(
@@ -976,9 +987,9 @@
 
     Spriteset_Map.prototype.removeNameLayer = function () {
         let layer = this._nameLayer;
+        if (!layer) return;
         const children = layer.children;
         const length = children.length;
-        if (!layer) return;
 
         children.forEach((i) => {
             i.visible = false;
@@ -988,9 +999,18 @@
         });
 
         layer.removeChildren(0, length);
+        this.removeChild(layer);
 
         layer = null;
         this._nameLayer = null;
+    };
+
+    const alias_Spriteset_Map_destroy = Spriteset_Map.prototype.destroy;
+    Spriteset_Map.prototype.destroy = function () {
+        this.removeNameLayer();
+        if (alias_Spriteset_Map_destroy) {
+            alias_Spriteset_Map_destroy.call(this);
+        }
     };
 
     const alias_Spriteset_Map_createCharacters =

@@ -11,29 +11,29 @@ const userDatabase = {
     "actorId": 2,
     "mapId": 1,
     "x": 10,
-    "y": 3,
+    "y": 4,
     "characterName": "Actor1",
     "characterIndex": 0,
     "switches": {},
     "variables": {},
-    "gold": 97110,
+    "gold": 145490,
     "weapons": {
-      "1": 0,
-      "2": 0
+      "1": 1,
+      "2": 1
     },
     "armors": {
-      "9": 0
+      "9": 1
     },
     "items": {
-      "7": 1
+      "7": 2
     }
   },
   "player2": {
     "password": "123",
     "actorId": 3,
     "mapId": 1,
-    "x": 2,
-    "y": 2,
+    "x": 8,
+    "y": 7,
     "characterName": "Actor1",
     "characterIndex": 0,
     "switches": {},
