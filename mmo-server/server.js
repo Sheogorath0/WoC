@@ -203,15 +203,15 @@ wss.on('connection', (ws) => {
                 const price = packet.price;
                 const quantity = Math.max(1, packet.quantity || 1);
                 const itemType = packet.itemType || 'weapon'; // 'weapon', 'armor', 'item'
-
+                
                 const collectionName = itemType === 'weapon' ? 'weapons' : (itemType === 'armor' ? 'armors' : 'items');
-
+                
                 if (activePlayers[myUserId] && activePlayers[myUserId][collectionName] && activePlayers[myUserId][collectionName][itemId] >= quantity && price > 0) {
                     activePlayers[myUserId][collectionName][itemId] -= quantity;
                     if (activePlayers[myUserId][collectionName][itemId] <= 0) {
                         delete activePlayers[myUserId][collectionName][itemId];
                     }
-
+                    
                     const newAuction = {
                         id: auctionIdCounter++,
                         sellerId: myUserId,
@@ -222,9 +222,9 @@ wss.on('connection', (ws) => {
                         timestamp: Date.now()
                     };
                     auctionDatabase.push(newAuction);
-
+                    
                     ws.send(JSON.stringify({ type: 'AUCTION_REGISTER_SUCCESS', itemId: itemId, itemType: itemType, quantity: quantity }));
-
+                    
                     // 전체 유저에게 리스트 갱신 알림
                     wss.clients.forEach((client) => {
                         if (client.readyState === 1) {
@@ -239,7 +239,7 @@ wss.on('connection', (ws) => {
                 const auctionId = packet.auctionId;
                 const buyQuantity = Math.max(1, packet.buyQuantity || 1);
                 const auctionIndex = auctionDatabase.findIndex(a => a.id === auctionId);
-
+                
                 if (auctionIndex !== -1) {
                     const auctionItem = auctionDatabase[auctionIndex];
                     if (auctionItem.quantity >= buyQuantity) {
@@ -249,24 +249,24 @@ wss.on('connection', (ws) => {
                             activePlayers[myUserId].gold -= totalPrice;
                             const collectionName = auctionItem.itemType === 'weapon' ? 'weapons' : (auctionItem.itemType === 'armor' ? 'armors' : 'items');
                             activePlayers[myUserId][collectionName][auctionItem.itemId] = (activePlayers[myUserId][collectionName][auctionItem.itemId] || 0) + buyQuantity;
-
+                            
                             // 판매자 대금 보관
                             auctionPendingIncome[auctionItem.sellerId] = (auctionPendingIncome[auctionItem.sellerId] || 0) + totalPrice;
-
+                            
                             // 수량 차감 및 리스트 갱신
                             auctionItem.quantity -= buyQuantity;
                             if (auctionItem.quantity <= 0) {
                                 auctionDatabase.splice(auctionIndex, 1);
                             }
-
-                            ws.send(JSON.stringify({
-                                type: 'AUCTION_BUY_SUCCESS',
-                                itemId: auctionItem.itemId,
+                            
+                            ws.send(JSON.stringify({ 
+                                type: 'AUCTION_BUY_SUCCESS', 
+                                itemId: auctionItem.itemId, 
                                 itemType: auctionItem.itemType,
-                                quantity: buyQuantity,
-                                price: totalPrice
+                                quantity: buyQuantity, 
+                                price: totalPrice 
                             }));
-
+                            
                             // 판매자/전체 유저에게 리스트 갱신 알림
                             wss.clients.forEach((client) => {
                                 if (client.readyState === 1) {
@@ -346,17 +346,17 @@ wss.on('connection', (ws) => {
                 userDatabase[myUserId].y = activePlayers[myUserId].y;
                 if (activePlayers[myUserId].characterName !== undefined) userDatabase[myUserId].characterName = activePlayers[myUserId].characterName;
                 if (activePlayers[myUserId].characterIndex !== undefined) userDatabase[myUserId].characterIndex = activePlayers[myUserId].characterIndex;
-
+                
                 // 개인 스위치/변수 상태 파일 저장
                 userDatabase[myUserId].switches = activePlayers[myUserId].switches || {};
                 userDatabase[myUserId].variables = activePlayers[myUserId].variables || {};
-
+                
                 // 골드 및 인벤토리 최종 저장
                 if (activePlayers[myUserId].gold !== undefined) userDatabase[myUserId].gold = activePlayers[myUserId].gold;
                 if (activePlayers[myUserId].weapons) userDatabase[myUserId].weapons = activePlayers[myUserId].weapons;
                 if (activePlayers[myUserId].armors) userDatabase[myUserId].armors = activePlayers[myUserId].armors;
                 if (activePlayers[myUserId].items) userDatabase[myUserId].items = activePlayers[myUserId].items;
-
+                
                 saveUserData(userDatabase);
             }
 
@@ -387,11 +387,11 @@ setInterval(() => {
             userDatabase[id].y = activePlayers[id].y;
             if (activePlayers[id].characterName !== undefined) userDatabase[id].characterName = activePlayers[id].characterName;
             if (activePlayers[id].characterIndex !== undefined) userDatabase[id].characterIndex = activePlayers[id].characterIndex;
-
+            
             // 자동 세이브 시 개인 스위치/변수 반영
             userDatabase[id].switches = activePlayers[id].switches || {};
             userDatabase[id].variables = activePlayers[id].variables || {};
-
+            
             // 골드 및 인벤토리 자동 저장
             if (activePlayers[id].gold !== undefined) userDatabase[id].gold = activePlayers[id].gold;
             if (activePlayers[id].weapons) userDatabase[id].weapons = activePlayers[id].weapons;

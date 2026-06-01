@@ -41,12 +41,12 @@
         this.setThrough(true);
         this.setStepAnime(true);
         this._sprite = null;
-
+        
         // ⚔️ [전투 동기화] 전투 아이콘 스프라이트 및 전투 상태 변수
         this._battleIconSprite = null;
         this._isFighting = data ? !!data.inBattle : false;
     };
-
+    
     // ⚔️ [전투 동기화] 상태 갱신 함수
     Game_NetPlayer.prototype.setBattleStatus = function (isFighting) {
         this._isFighting = isFighting;
@@ -88,7 +88,7 @@
                 }
             }
         }
-
+        
         // ⚔️ [전투 동기화] 전투 상태 갱신
         if (data.inBattle !== undefined) {
             this.setBattleStatus(data.inBattle);
@@ -101,26 +101,26 @@
     Sprite_BattleIcon.prototype.constructor = Sprite_BattleIcon;
     Sprite_BattleIcon.prototype.initialize = function () {
         Sprite.prototype.initialize.call(this);
-
+        
         // 더 화려하고 역동적인 연출을 위해 캔버스 크기를 넉넉히 잡습니다.
         this.bitmap = new Bitmap(80, 80);
         this.bitmap.fontFace = $gameSystem.mainFontFace();
         this.bitmap.fontSize = 28;
-
+        
         // 붉은 기운의 전투 테두리 효과를 연출하기 위해 그림자 효과 추가
         const ctx = this.bitmap.context;
         ctx.shadowColor = "rgba(255, 0, 0, 0.8)";
         ctx.shadowBlur = 8;
-
+        
         // 중앙에 두 개의 칼이 격돌하는 듯한 이모지 묘사
         this.bitmap.drawText("⚔️", 0, 0, 80, 80, "center");
-
+        
         this.anchor.x = 0.5;
         this.anchor.y = 0.5; // 애니메이션 축을 중앙으로 설정
         this._baseY = -80;   // 기준 높이 (이름표보다 위로 설정)
         this.y = this._baseY;
         this.visible = false;
-
+        
         this._tick = 0; // 애니메이션 타이머
     };
 
@@ -132,10 +132,10 @@
 
             // 1. 상하로 부드럽게 둥실둥실 뜨는 효과 (Sine파 이용, 속도를 0.08 -> 0.04로 50% 감속)
             const floatY = Math.sin(this._tick * 0.04) * 8;
-
+            
             // 2. 치열한 격투를 나타내는 좌우 미세 진동 (Cosine파 이용, 속도를 0.4 -> 0.2로 50% 감속)
             const shakeX = Math.cos(this._tick * 0.2) * 2;
-
+            
             this.x = shakeX;
             this.y = this._baseY + floatY;
 
@@ -143,7 +143,7 @@
             const scale = 1.05 + Math.sin(this._tick * 0.075) * 0.1;
             this.scale.x = scale;
             this.scale.y = scale;
-
+            
             // 4. 각도를 아주 미세하게 좌우로 흔들어 생동감 강화 (속도를 0.1 -> 0.05로 50% 감속)
             this.rotation = Math.sin(this._tick * 0.05) * 0.08;
         }
@@ -333,7 +333,7 @@
                     $gameParty.loseItem(db[packet.itemId], packet.quantity || 1);
                 }
                 _isSyncingInventoryFromServer = false;
-
+                
                 // 경매장 씬 활성화 시 판매 인벤토리 목록을 즉시 갱신
                 if (SceneManager._scene && SceneManager._scene.constructor.name === "Scene_Auction" && typeof SceneManager._scene.refreshSellWindow === "function") {
                     SceneManager._scene.refreshSellWindow();
@@ -411,7 +411,7 @@
         netPlayer._sprite = sprite;
 
         // NameTag 처리는 RS_EventName.js가 담당하므로 여기서는 삭제
-
+        
         // ⚔️ [전투 동기화] 아이콘 스프라이트 부착
         const battleIcon = new Sprite_BattleIcon();
         sprite.addChild(battleIcon);
@@ -516,7 +516,7 @@
 
     // 전투 씬으로 넘어가는 로직 가로채기 (상태 전송)
     const _SceneManager_push = SceneManager.push;
-    SceneManager.push = function (sceneClass) {
+    SceneManager.push = function(sceneClass) {
         if (sceneClass === Scene_Battle) {
             if (isLoggedIn && socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({ type: 'BATTLE_START' }));
@@ -527,7 +527,7 @@
 
     // 전투 종료 감지 (맵으로 복귀할 때)
     const _Scene_Battle_terminate = Scene_Battle.prototype.terminate;
-    Scene_Battle.prototype.terminate = function () {
+    Scene_Battle.prototype.terminate = function() {
         _Scene_Battle_terminate.call(this);
         if (isLoggedIn && socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'BATTLE_END' }));
@@ -553,10 +553,10 @@
     }
 
     const _Game_Switches_setValue = Game_Switches.prototype.setValue;
-    Game_Switches.prototype.setValue = function (switchId, value) {
+    Game_Switches.prototype.setValue = function(switchId, value) {
         const oldValue = this.value(switchId);
         _Game_Switches_setValue.call(this, switchId, value);
-
+        
         if (oldValue !== value && !_isSyncingFromServer && isLoggedIn) {
             if (socket && socket.readyState === WebSocket.OPEN) {
                 if (isSharedSwitch(switchId)) {
@@ -581,10 +581,10 @@
     };
 
     const _Game_Variables_setValue = Game_Variables.prototype.setValue;
-    Game_Variables.prototype.setValue = function (variableId, value) {
+    Game_Variables.prototype.setValue = function(variableId, value) {
         const oldValue = this.value(variableId);
         _Game_Variables_setValue.call(this, variableId, value);
-
+        
         if (oldValue !== value && !_isSyncingFromServer && isLoggedIn) {
             if (socket && socket.readyState === WebSocket.OPEN) {
                 if (isSharedVariable(variableId)) {
@@ -612,7 +612,7 @@
     // 7. 인벤토리 및 골드 실시간 서버 저장 시스템 (경매장 기반)
     // ===================================================================
     const _Game_Party_gainGold = Game_Party.prototype.gainGold;
-    Game_Party.prototype.gainGold = function (amount) {
+    Game_Party.prototype.gainGold = function(amount) {
         _Game_Party_gainGold.call(this, amount);
         if (!_isSyncingInventoryFromServer && isLoggedIn && socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'SYNC_GOLD', gold: this._gold }));
@@ -620,7 +620,7 @@
     };
 
     const _Game_Party_loseGold = Game_Party.prototype.loseGold;
-    Game_Party.prototype.loseGold = function (amount) {
+    Game_Party.prototype.loseGold = function(amount) {
         _Game_Party_loseGold.call(this, amount);
         if (!_isSyncingInventoryFromServer && isLoggedIn && socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'SYNC_GOLD', gold: this._gold }));
@@ -628,7 +628,7 @@
     };
 
     const _Game_Party_gainItem = Game_Party.prototype.gainItem;
-    Game_Party.prototype.gainItem = function (item, amount, includeEquip) {
+    Game_Party.prototype.gainItem = function(item, amount, includeEquip) {
         _Game_Party_gainItem.call(this, item, amount, includeEquip);
         if (!_isSyncingInventoryFromServer && isLoggedIn && socket && socket.readyState === WebSocket.OPEN && item) {
             socket.send(JSON.stringify({
@@ -642,7 +642,7 @@
 
     // 경매장 UI 플러그인 등 외부에서 서버로 패킷을 쏠 수 있는 전역 인터페이스
     window.$gameAuction = window.$gameAuction || { list: [], pendingIncome: 0 };
-    window.$gameAuction.sendPacket = function (packet) {
+    window.$gameAuction.sendPacket = function(packet) {
         if (isLoggedIn && socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify(packet));
         }
