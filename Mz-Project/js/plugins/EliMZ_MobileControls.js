@@ -984,6 +984,7 @@ Imported.Eli_MobileControls = true
         }
 
         getDirection(coordinates) {
+            this.createDirectionArea()
             const { x, y } = coordinates
             return this.directionAreas.findIndex(rect => rect.contains(x, y))
         }
@@ -1350,7 +1351,7 @@ Imported.Eli_MobileControls = true
                 img: param.img,
                 padX: Number(param.padX),
                 padY: Number(param.padY),
-                verticalOrientation: "",
+                verticalOrientation: param.verticalOrientation,
                 vibration: Number(param.vibration),
                 width: Number(param.width),
                 enableScreenMove: param.enableScreenMove === "true",
